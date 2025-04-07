@@ -6,7 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
-# -- SHL assessments
+# -- SHL assessments data
 assessments = [
     {
         "name": "General Ability Test",
@@ -45,47 +45,65 @@ def load_model():
 model = load_model()
 assessment_embeddings = model.encode([a["description"] for a in assessments], convert_to_tensor=True)
 
-# -- Streamlit UI
+# -- App layout
 st.set_page_config(page_title="SHL Assessment Recommender", layout="centered")
 st.title("📘 SHL Assessment Recommender")
 
 input_method = st.radio("Select input method:", ["Enter Text", "Enter URL"])
-
 query_text = ""
 
-# -- Handle URL or manual input
+# -- URL validation
+def is_valid_url(url):
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except:
+        return False
+
+# -- Handle inputs
 if input_method == "Enter Text":
     query_text = st.text_area("Enter job description or related query:")
 elif input_method == "Enter URL":
     url_input = st.text_input("Paste the job description URL:")
-
-    def is_valid_url(url):
-        try:
-            result = urlparse(url)
-            return all([result.scheme, result.netloc])
-        except:
-            return False
 
     if url_input and is_valid_url(url_input):
         try:
             response = requests.get(url_input, timeout=5)
             soup = BeautifulSoup(response.text, 'html.parser')
             query_text = ' '.join(p.text for p in soup.find_all('p')[:5])
-            st.success("Content extracted successfully from URL.")
-        except Exception as e:
-            st.error(f"Failed to fetch or parse URL: {e}")
+            st.success("✅ Content extracted from URL successfully.")
+        except requests.exceptions.RequestException as e:
+            st.error(f"❌ Failed to fetch or parse URL: {e}")
 
-if st.button("🔍 Recommend Assessments") and query_text.strip():
-    query_embedding = model.encode(query_text, convert_to_tensor=True)
-    similarities = util.cos_sim(query_embedding, assessment_embeddings)[0]
-    threshold = 0.4
-    top_indices = [i for i in np.argsort(-similarities) if similarities[i] > threshold][:10]
+# -- Optional: Show all available assessments
+if st.checkbox("Show all available SHL assessments"):
+    st.subheader("📋 All SHL Assessments:")
+    for a in assessments:
+        st.markdown(f"""
+**{a['name']}**  
+🔗 [Link to test]({a['url']})  
+📄 Type: {a['test_type']}  
+⏱ Duration: {a['duration']}  
+🌐 Remote Testing: {a['remote_testing']}  
+🧠 Adaptive IRT: {a['adaptive_irt']}
+---
+""")
 
-    st.subheader("📝 Recommended SHL Assessments:")
-    if top_indices:
-        for idx in top_indices:
-            a = assessments[idx]
-            st.markdown(f"""
+# -- Threshold slider
+threshold = st.slider("🔍 Similarity threshold", 0.0, 1.0, 0.4, 0.05)
+
+# -- Recommend button
+if st.button("🚀 Recommend Assessments") and query_text.strip():
+    with st.spinner("Analyzing and recommending assessments..."):
+        query_embedding = model.encode(query_text, convert_to_tensor=True)
+        similarities = util.cos_sim(query_embedding, assessment_embeddings)[0]
+        top_indices = [i for i in np.argsort(-similarities) if similarities[i] > threshold][:10]
+
+        st.subheader("📝 Recommended SHL Assessments:")
+        if top_indices:
+            for idx in top_indices:
+                a = assessments[idx]
+                st.markdown(f"""
 **{a['name']}**  
 🔗 [Link to test]({a['url']})  
 📄 Type: {a['test_type']}  
@@ -95,5 +113,5 @@ if st.button("🔍 Recommend Assessments") and query_text.strip():
 📊 **Similarity Score**: {similarities[idx]:.2f}
 ---
 """)
-    else:
-        st.warning("No matching assessments found. Try a more detailed input.")
+        else:
+            st.warning("⚠️ No matching assessments found. Try a more detailed input.")
