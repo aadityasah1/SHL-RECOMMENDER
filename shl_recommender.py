@@ -6,7 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
-# Load SHL assessments
+# -- SHL assessments
 assessments = [
     {
         "name": "General Ability Test",
@@ -37,41 +37,63 @@ assessments = [
     }
 ]
 
-# Load model
+# -- Load model from local directory
 @st.cache_resource
 def load_model():
-    return SentenceTransformer('paraphrase-MiniLM-L3-v2')
+    return SentenceTransformer('./all-MiniLM-L6-v2')
 
 model = load_model()
 assessment_embeddings = model.encode([a["description"] for a in assessments], convert_to_tensor=True)
 
-# Streamlit UI
-st.title("🔍 SHL Assessment Recommender")
+# -- Streamlit UI
+st.set_page_config(page_title="SHL Assessment Recommender", layout="centered")
+st.title("📘 SHL Assessment Recommender")
 
-option = st.radio("Choose input method:", ("Enter text", "Paste job URL"))
+input_method = st.radio("Select input method:", ["Enter Text", "Enter URL"])
 
-if option == "Enter text":
-    query = st.text_area("Enter job description or role:")
-elif option == "Paste job URL":
-    url = st.text_input("Enter job description URL:")
-    if url:
+query_text = ""
+
+# -- Handle URL or manual input
+if input_method == "Enter Text":
+    query_text = st.text_area("Enter job description or related query:")
+elif input_method == "Enter URL":
+    url_input = st.text_input("Paste the job description URL:")
+
+    def is_valid_url(url):
         try:
-            response = requests.get(url, timeout=5)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            query = ' '.join(p.text for p in soup.find_all('p')[:5])
-            st.success("Extracted text from URL.")
+            result = urlparse(url)
+            return all([result.scheme, result.netloc])
         except:
-            st.error("Failed to extract content from URL.")
-            query = ""
+            return False
 
-if st.button("Recommend Assessments") and query:
-    query_embedding = model.encode(query, convert_to_tensor=True)
+    if url_input and is_valid_url(url_input):
+        try:
+            response = requests.get(url_input, timeout=5)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            query_text = ' '.join(p.text for p in soup.find_all('p')[:5])
+            st.success("Content extracted successfully from URL.")
+        except Exception as e:
+            st.error(f"Failed to fetch or parse URL: {e}")
+
+if st.button("🔍 Recommend Assessments") and query_text.strip():
+    query_embedding = model.encode(query_text, convert_to_tensor=True)
     similarities = util.cos_sim(query_embedding, assessment_embeddings)[0]
     threshold = 0.4
     top_indices = [i for i in np.argsort(-similarities) if similarities[i] > threshold][:10]
 
-    st.subheader("Recommended Assessments:")
-    for idx in top_indices:
-        a = assessments[idx]
-        st.markdown(f"**{a['name']}**  \nURL: {a['url']}  \nType: {a['test_type']}  \nRemote Testing: {a['remote_testing']}  \nAdaptive IRT: {a['adaptive_irt']}  \nDuration: {a['duration']}  \n**Similarity**: {similarities[idx]:.2f}")
-        st.markdown("---")
+    st.subheader("📝 Recommended SHL Assessments:")
+    if top_indices:
+        for idx in top_indices:
+            a = assessments[idx]
+            st.markdown(f"""
+**{a['name']}**  
+🔗 [Link to test]({a['url']})  
+📄 Type: {a['test_type']}  
+⏱ Duration: {a['duration']}  
+🌐 Remote Testing: {a['remote_testing']}  
+🧠 Adaptive IRT: {a['adaptive_irt']}  
+📊 **Similarity Score**: {similarities[idx]:.2f}
+---
+""")
+    else:
+        st.warning("No matching assessments found. Try a more detailed input.")
