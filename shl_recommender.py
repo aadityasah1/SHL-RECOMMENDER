@@ -40,7 +40,7 @@ assessments = [
 # Load model
 @st.cache_resource
 def load_model():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+    return SentenceTransformer('paraphrase-MiniLM-L3-v2')
 
 model = load_model()
 assessment_embeddings = model.encode([a["description"] for a in assessments], convert_to_tensor=True)
