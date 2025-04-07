@@ -1,19 +1,13 @@
-# SHL Assessment Recommender System
-import pandas as pd
-import numpy as np
+import streamlit as st
 from sentence_transformers import SentenceTransformer, util
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
-import uvicorn
+import numpy as np
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-import logging
 
+# Load model and assessments
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-logging.basicConfig(level=logging.INFO)
-
-#Load SHL assessments
 assessments = [
     {
         "name": "General Ability Test",
@@ -44,25 +38,10 @@ assessments = [
     }
 ]
 
-#Embedding Model
-model = SentenceTransformer('all-MiniLM-L6-v2')
-
 assessment_texts = [a["description"] for a in assessments]
 assessment_embeddings = model.encode(assessment_texts, convert_to_tensor=True)
 
-#FastApi initialization
-app = FastAPI(
-    title="SHL Assessment Recommender",
-    version="1.0",
-    description="Recommends SHL assessments based on job description or query."
-)
-
-#Input Factor
-class QueryInput(BaseModel):
-    query: str = None
-    url: str = None
-
-#Url Checking
+# Helper function
 def is_valid_url(url: str) -> bool:
     try:
         result = urlparse(url)
@@ -70,37 +49,19 @@ def is_valid_url(url: str) -> bool:
     except:
         return False
 
-#Endpoint Recommendation
-@app.post("/recommend")
-async def recommend(data: QueryInput):
-    logging.info(f"Incoming request: {data}")
+def get_text_from_url(url):
+    try:
+        response = requests.get(url, timeout=5)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        paragraphs = soup.find_all('p')
+        return ' '.join(p.text for p in paragraphs[:5])
+    except Exception as e:
+        return f"Error fetching data: {str(e)}"
 
-    # Extract query from URL or direct input
-    query_text = ""
-    if data.url:
-        if not is_valid_url(data.url):
-            return {"error": "Invalid URL provided"}
-
-        try:
-            response = requests.get(data.url, timeout=5)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            paragraphs = soup.find_all('p')
-            query_text = ' '.join(p.text for p in paragraphs[:5])
-        except requests.RequestException as e:
-            return {"error": f"Failed to fetch or parse URL: {str(e)}"}
-    elif data.query:
-        query_text = data.query
-    else:
-        return {"error": "No query or URL provided."}
-
-    if not query_text.strip():
-        return {"error": "Extracted text is empty."}
-
-    # Compute similarity
+def get_recommendations(query_text):
     query_embedding = model.encode(query_text, convert_to_tensor=True)
     similarities = util.cos_sim(query_embedding, assessment_embeddings)[0]
-    threshold = 0.4  
+    threshold = 0.4
     top_indices = [i for i in np.argsort(-similarities) if similarities[i] > threshold][:10]
 
     results = []
@@ -115,9 +76,33 @@ async def recommend(data: QueryInput):
             "test_type": a["test_type"],
             "similarity_score": float(similarities[idx])
         })
+    return results
 
-    return {"results": results}
+# Streamlit UI
+st.title("🧠 SHL Assessment Recommender")
 
-#Run Locally
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+option = st.radio("Choose Input Method:", ("Job Description Text", "Job URL"))
+
+input_text = ""
+
+if option == "Job Description Text":
+    input_text = st.text_area("Paste the job description here")
+else:
+    url = st.text_input("Enter job description URL:")
+    if url and is_valid_url(url):
+        input_text = get_text_from_url(url)
+        st.info("Fetched text from URL:")
+        st.write(input_text)
+
+if st.button("Recommend Assessments") and input_text.strip():
+    recommendations = get_recommendations(input_text)
+    if recommendations:
+        st.success("Recommended Assessments:")
+        for rec in recommendations:
+            st.write(f"**{rec['name']}** - [{rec['url']}]({rec['url']})")
+            st.write(f"Type: {rec['test_type']} | Duration: {rec['duration']}")
+            st.write(f"Remote: {rec['remote_testing']} | Adaptive IRT: {rec['adaptive_irt']}")
+            st.write(f"Similarity Score: {rec['similarity_score']:.2f}")
+            st.markdown("---")
+    else:
+        st.warning("No relevant assessments found.")
