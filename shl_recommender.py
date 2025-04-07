@@ -1,12 +1,19 @@
-import streamlit as st
+# SHL Assessment Recommender System
 import pandas as pd
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+import uvicorn
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+import logging
 
-# -- SHL assessments data
+
+logging.basicConfig(level=logging.INFO)
+
+#Load SHL assessments de
 assessments = [
     {
         "name": "General Ability Test",
@@ -37,81 +44,80 @@ assessments = [
     }
 ]
 
-# -- Load model from local directory
-@st.cache_resource
-def load_model():
-    return SentenceTransformer('./all-MiniLM-L6-v2')
+#Embedding Model
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-model = load_model()
-assessment_embeddings = model.encode([a["description"] for a in assessments], convert_to_tensor=True)
+assessment_texts = [a["description"] for a in assessments]
+assessment_embeddings = model.encode(assessment_texts, convert_to_tensor=True)
 
-# -- App layout
-st.set_page_config(page_title="SHL Assessment Recommender", layout="centered")
-st.title("📘 SHL Assessment Recommender")
+#FastApi initialization
+app = FastAPI(
+    title="SHL Assessment Recommender",
+    version="1.0",
+    description="Recommends SHL assessments based on job description or query."
+)
 
-input_method = st.radio("Select input method:", ["Enter Text", "Enter URL"])
-query_text = ""
+#Input Factor
+class QueryInput(BaseModel):
+    query: str = None
+    url: str = None
 
-# -- URL validation
-def is_valid_url(url):
+#Url Checking
+def is_valid_url(url: str) -> bool:
     try:
         result = urlparse(url)
         return all([result.scheme, result.netloc])
     except:
         return False
 
-# -- Handle inputs
-if input_method == "Enter Text":
-    query_text = st.text_area("Enter job description or related query:")
-elif input_method == "Enter URL":
-    url_input = st.text_input("Paste the job description URL:")
+#Endpoint Recommendation
+@app.post("/recommend")
+async def recommend(data: QueryInput):
+    logging.info(f"Incoming request: {data}")
 
-    if url_input and is_valid_url(url_input):
+    # Extract query from URL or direct input
+    query_text = ""
+    if data.url:
+        if not is_valid_url(data.url):
+            return {"error": "Invalid URL provided"}
+
         try:
-            response = requests.get(url_input, timeout=5)
+            response = requests.get(data.url, timeout=5)
+            response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
-            query_text = ' '.join(p.text for p in soup.find_all('p')[:5])
-            st.success("✅ Content extracted from URL successfully.")
-        except requests.exceptions.RequestException as e:
-            st.error(f"❌ Failed to fetch or parse URL: {e}")
+            paragraphs = soup.find_all('p')
+            query_text = ' '.join(p.text for p in paragraphs[:5])
+        except requests.RequestException as e:
+            return {"error": f"Failed to fetch or parse URL: {str(e)}"}
+    elif data.query:
+        query_text = data.query
+    else:
+        return {"error": "No query or URL provided."}
 
-# -- Optional: Show all available assessments
-if st.checkbox("Show all available SHL assessments"):
-    st.subheader("📋 All SHL Assessments:")
-    for a in assessments:
-        st.markdown(f"""
-**{a['name']}**  
-🔗 [Link to test]({a['url']})  
-📄 Type: {a['test_type']}  
-⏱ Duration: {a['duration']}  
-🌐 Remote Testing: {a['remote_testing']}  
-🧠 Adaptive IRT: {a['adaptive_irt']}
----
-""")
+    if not query_text.strip():
+        return {"error": "Extracted text is empty."}
 
-# -- Threshold slider
-threshold = st.slider("🔍 Similarity threshold", 0.0, 1.0, 0.4, 0.05)
+    # Compute similarity
+    query_embedding = model.encode(query_text, convert_to_tensor=True)
+    similarities = util.cos_sim(query_embedding, assessment_embeddings)[0]
+    threshold = 0.4  
+    top_indices = [i for i in np.argsort(-similarities) if similarities[i] > threshold][:10]
 
-# -- Recommend button
-if st.button("🚀 Recommend Assessments") and query_text.strip():
-    with st.spinner("Analyzing and recommending assessments..."):
-        query_embedding = model.encode(query_text, convert_to_tensor=True)
-        similarities = util.cos_sim(query_embedding, assessment_embeddings)[0]
-        top_indices = [i for i in np.argsort(-similarities) if similarities[i] > threshold][:10]
+    results = []
+    for idx in top_indices:
+        a = assessments[idx]
+        results.append({
+            "name": a["name"],
+            "url": a["url"],
+            "remote_testing": a["remote_testing"],
+            "adaptive_irt": a["adaptive_irt"],
+            "duration": a["duration"],
+            "test_type": a["test_type"],
+            "similarity_score": float(similarities[idx])
+        })
 
-        st.subheader("📝 Recommended SHL Assessments:")
-        if top_indices:
-            for idx in top_indices:
-                a = assessments[idx]
-                st.markdown(f"""
-**{a['name']}**  
-🔗 [Link to test]({a['url']})  
-📄 Type: {a['test_type']}  
-⏱ Duration: {a['duration']}  
-🌐 Remote Testing: {a['remote_testing']}  
-🧠 Adaptive IRT: {a['adaptive_irt']}  
-📊 **Similarity Score**: {similarities[idx]:.2f}
----
-""")
-        else:
-            st.warning("⚠️ No matching assessments found. Try a more detailed input.")
+    return {"results": results}
+
+#Run Locally
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
