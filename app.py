@@ -1,13 +1,11 @@
 import streamlit as st
 import requests
 
-# Set your FastAPI backend URL here
 API_URL = "https://shl-recommender-ucpw.onrender.com/recommend"
 
 st.title("SHL Assessment Recommender")
 st.markdown("Enter a job description or query, and get recommended assessments.")
 
-# Input box for query
 query = st.text_area("Enter Job Description / Query", height=200)
 
 if st.button("Get Recommendations"):
@@ -19,17 +17,18 @@ if st.button("Get Recommendations"):
                 response = requests.post(API_URL, json={"query": query})
                 if response.status_code == 200:
                     data = response.json()
-                    results = data.get("recommended_assessments", [])
+                    results = data.get("results", [])  # <-- Correct key
                     if results:
                         st.success(f"{len(results)} Recommendations found!")
                         for rec in results:
                             st.write("----")
+                            st.markdown(f"**Name:** {rec['name']}")
                             st.markdown(f"**URL:** [{rec['url']}]({rec['url']})")
-                            st.markdown(f"**Adaptive Support:** {rec['adaptive_support']}")
-                            st.markdown(f"**Remote Support:** {rec['remote_support']}")
-                            st.markdown(f"**Duration:** {rec['duration']} minutes")
-                            st.markdown(f"**Test Type:** {', '.join(rec['test_type'])}")
-                            st.markdown(f"**Description:** {rec['description']}")
+                            st.markdown(f"**Adaptive Support:** {rec['adaptive_irt']}")
+                            st.markdown(f"**Remote Support:** {rec['remote_testing']}")
+                            st.markdown(f"**Duration:** {rec['duration']}")
+                            st.markdown(f"**Test Type:** {rec['test_type']}")
+                            st.markdown(f"**Similarity Score:** {rec['similarity_score']:.2f}")
                     else:
                         st.info("No recommendations found.")
                 else:
