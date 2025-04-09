@@ -1,4 +1,3 @@
-# SHL Assessment Recommender System
 import pandas as pd
 import numpy as np
 import os
@@ -72,23 +71,21 @@ def is_valid_url(url: str) -> bool:
     except:
         return False
 
-# Health check endpoint (to avoid 404 on /)
+# Health check endpoint for Render
 @app.get("/")
 async def root():
     return {"message": "SHL Recommender API is live!"}
 
-# Main Recommendation Endpoint
+# POST-only endpoint for recommendations
 @app.post("/recommend")
 async def recommend(data: QueryInput):
     logging.info(f"Incoming request: {data}")
 
     query_text = ""
 
-    # Process input
     if data.url:
         if not is_valid_url(data.url):
             return {"error": "Invalid URL provided."}
-
         try:
             response = requests.get(data.url, timeout=5)
             response.raise_for_status()
@@ -97,7 +94,6 @@ async def recommend(data: QueryInput):
             query_text = ' '.join(p.text for p in paragraphs[:5])
         except requests.RequestException as e:
             return {"error": f"Failed to fetch or parse URL: {str(e)}"}
-
     elif data.query:
         query_text = data.query
     else:
@@ -113,22 +109,32 @@ async def recommend(data: QueryInput):
     threshold = 0.4
     top_indices = [i for i in np.argsort(-similarities) if similarities[i] > threshold][:10]
 
-    results = []
-    for idx in top_indices:
-        a = assessments[idx]
-        results.append({
-            "name": a["name"],
-            "url": a["url"],
-            "remote_testing": a["remote_testing"],
-            "adaptive_irt": a["adaptive_irt"],
-            "duration": a["duration"],
-            "test_type": a["test_type"],
-            "similarity_score": float(similarities[idx])
-        })
+    recommended_assessments = [
+        {
+            "name": assessments[idx]["name"],
+            "url": assessments[idx]["url"],
+            "remote_support": assessments[idx]["remote_testing"],
+            "adaptive_support": assessments[idx]["adaptive_irt"],
+            "duration": assessments[idx]["duration"].replace(" minutes", ""),
+            "test_type": [assessments[idx]["test_type"]],
+            "description": assessments[idx]["description"]
+        }
+        for idx in top_indices
+    ]
 
-    return {"results": results}
+    return {"recommended_assessments": recommended_assessments}
+
+# Optional: catch incorrect GET usage on /recommend
+@app.get("/recommend")
+async def recommend_get():
+    return {"error": "Use POST method with a query or URL."}
+
+# Log on startup
+@app.on_event("startup")
+def startup_event():
+    logging.info("✅ SHL Recommender API started successfully!")
 
 # Run locally or on Render
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # use Render's PORT env or fallback
+    port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
