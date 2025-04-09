@@ -11,10 +11,10 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import logging
 
-
+# Enable logging
 logging.basicConfig(level=logging.INFO)
 
-#Load SHL assessments de
+# Sample SHL assessments database
 assessments = [
     {
         "name": "General Ability Test",
@@ -45,25 +45,26 @@ assessments = [
     }
 ]
 
-#Embedding Model
+# Load embedding model
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
+# Pre-compute embeddings
 assessment_texts = [a["description"] for a in assessments]
 assessment_embeddings = model.encode(assessment_texts, convert_to_tensor=True)
 
-#FastApi initialization
+# Initialize FastAPI app
 app = FastAPI(
     title="SHL Assessment Recommender",
     version="1.0",
     description="Recommends SHL assessments based on job description or query."
 )
 
-#Input Factor
+# Input model
 class QueryInput(BaseModel):
     query: str = None
     url: str = None
 
-#Url Checking
+# Utility: Validate URL
 def is_valid_url(url: str) -> bool:
     try:
         result = urlparse(url)
@@ -71,16 +72,22 @@ def is_valid_url(url: str) -> bool:
     except:
         return False
 
-#Endpoint Recommendation
+# Health check endpoint (to avoid 404 on /)
+@app.get("/")
+async def root():
+    return {"message": "SHL Recommender API is live!"}
+
+# Main Recommendation Endpoint
 @app.post("/recommend")
 async def recommend(data: QueryInput):
     logging.info(f"Incoming request: {data}")
 
-    # Extract query from URL or direct input
     query_text = ""
+
+    # Process input
     if data.url:
         if not is_valid_url(data.url):
-            return {"error": "Invalid URL provided"}
+            return {"error": "Invalid URL provided."}
 
         try:
             response = requests.get(data.url, timeout=5)
@@ -90,6 +97,7 @@ async def recommend(data: QueryInput):
             query_text = ' '.join(p.text for p in paragraphs[:5])
         except requests.RequestException as e:
             return {"error": f"Failed to fetch or parse URL: {str(e)}"}
+
     elif data.query:
         query_text = data.query
     else:
@@ -101,7 +109,8 @@ async def recommend(data: QueryInput):
     # Compute similarity
     query_embedding = model.encode(query_text, convert_to_tensor=True)
     similarities = util.cos_sim(query_embedding, assessment_embeddings)[0]
-    threshold = 0.4  
+
+    threshold = 0.4
     top_indices = [i for i in np.argsort(-similarities) if similarities[i] > threshold][:10]
 
     results = []
@@ -119,7 +128,7 @@ async def recommend(data: QueryInput):
 
     return {"results": results}
 
-#Run Locally
+# Run locally or on Render
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # use PORT env var or default to 8000
+    port = int(os.environ.get("PORT", 10000))  # use Render's PORT env or fallback
     uvicorn.run(app, host="0.0.0.0", port=port)
